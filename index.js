@@ -75,15 +75,19 @@ app.get("/admin/events", async (req, res) => {
   });
 });
 
-// 🔄 Escucha de cambios en Firestore para notificar a Clientes y Admin
+// 🔄 Escucha de cambios en Firestore para notificar a Clientes y Admin de forma limpia
 db.collection("usuarios").onSnapshot(async (snapshot) => {
   snapshot.docChanges().forEach((change) => {
-    const data = change.doc.data();
     const docId = change.doc.id;
 
     clients.forEach((client) => {
       if (client.userId === docId) {
-        client.res.write(`data: ${JSON.stringify(data)}\n\n`);
+        if (change.type === "removed") {
+          client.res.write(`data: ${JSON.stringify({ comando: "eliminar" })}\n\n`);
+        } else {
+          const data = change.doc.data();
+          client.res.write(`data: ${JSON.stringify(data)}\n\n`);
+        }
       }
     });
   });
