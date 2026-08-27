@@ -196,7 +196,7 @@ app.delete("/usuarios-completo/:userId", async (req, res) => {
   }
 });
 
-// 🛰️ Ping para saber si está online
+// 🛰️ Ping para saber si está online (Modificado para evitar recrear eliminados)
 app.post("/ping", async (req, res) => {
   const { userId, timestamp } = req.body;
 
@@ -204,7 +204,14 @@ app.post("/ping", async (req, res) => {
     return res.status(400).json({ error: "Faltan datos" });
   }
 
-  await db.collection("usuarios").doc(userId).set({ last_active: timestamp }, { merge: true });
+  const docRef = db.collection("usuarios").doc(userId);
+  const doc = await docRef.get();
+
+  if (!doc.exists) {
+    return res.status(404).json({ error: "Usuario no existe o fue eliminado" });
+  }
+
+  await docRef.set({ last_active: timestamp }, { merge: true });
   res.json({ success: true });
 });
 
