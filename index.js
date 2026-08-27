@@ -23,7 +23,8 @@ const port = process.env.PORT || 4000;
 app.use(cors());
 app.use(express.json());
 
-const clients = []; // Lista de conexiones SSE activas
+const clients = []; // Lista de conexiones SSE activas por usuario
+const adminClients = []; // Lista de conexiones SSE activas para el panel de administración
 
 // 📡 Conexión SSE por usuario
 app.get("/events/:userId", (req, res) => {
@@ -49,8 +50,33 @@ app.get("/events/:userId", (req, res) => {
   console.log(`🟢 Cliente conectado: ${userId} a las ${hora}:${minutos}`);
 });
 
-// 🔄 Escucha de cambios en Firestore
-db.collection("usuarios").onSnapshot((snapshot) => {
+// 📡 Canal SSE para el Panel de Administración (Todos los usuarios)
+app.get("/admin/events", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  adminClients.push(res);
+
+  try {
+    const snapshot = await db.collection("usuarios").get();
+    const usuariosObj = {};
+    snapshot.forEach(doc => {
+      usuariosObj[doc.id] = doc.data();
+    });
+    res.write(`data: ${JSON.stringify(usuariosObj)}\n\n`);
+  } catch (e) {
+    console.error("Error al obtener usuarios iniciales:", e);
+  }
+
+  req.on("close", () => {
+    adminClients.splice(adminClients.indexOf(res), 1);
+  });
+});
+
+// 🔄 Escucha de cambios en Firestore para notificar a Clientes y Admin
+db.collection("usuarios").onSnapshot(async (snapshot) => {
   snapshot.docChanges().forEach((change) => {
     const data = change.doc.data();
     const docId = change.doc.id;
@@ -61,6 +87,20 @@ db.collection("usuarios").onSnapshot((snapshot) => {
       }
     });
   });
+
+  try {
+    const snapshotTotal = await db.collection("usuarios").get();
+    const usuariosObj = {};
+    snapshotTotal.forEach(doc => {
+      usuariosObj[doc.id] = doc.data();
+    });
+
+    adminClients.forEach(adminRes => {
+      adminRes.write(`data: ${JSON.stringify(usuariosObj)}\n\n`);
+    });
+  } catch (e) {
+    console.error("Error al actualizar admin SSE:", e);
+  }
 });
 
 // 📥 Crear o actualizar usuario
@@ -73,6 +113,30 @@ app.post("/usuarios", async (req, res) => {
 
   await db.collection("usuarios").doc(userId).set(data, { merge: true });
   res.status(200).json({ success: true });
+});
+
+// 🎮 Recibir comandos del admin para un usuario
+app.post("/admin/command", async (req, res) => {
+  const { userId, comando } = req.body;
+  if (!userId) return res.status(400).json({ error: "Falta userId" });
+
+  try {
+    await db.collection("usuarios").doc(userId).set({ comando: comando || "" }, { merge: true });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "No se pudo guardar el comando" });
+  }
+});
+
+// 🗑️ Eliminar usuario desde el panel de admin
+app.delete("/admin/user/:userId", async (req, res) => {
+  const userId = req.params.userId;
+  try {
+    await db.collection("usuarios").doc(userId).delete();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "No se pudo eliminar" });
+  }
 });
 
 // ❌ Eliminar todas las conexiones
@@ -136,7 +200,7 @@ app.post("/ping", async (req, res) => {
     return res.status(400).json({ error: "Faltan datos" });
   }
 
-  await db.collection("usuarios").doc(userId).set({ lastPing: timestamp }, { merge: true });
+  await db.collection("usuarios").doc(userId).set({ last_active: timestamp }, { merge: true });
   res.json({ success: true });
 });
 
